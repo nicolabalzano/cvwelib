@@ -25,7 +25,7 @@ def __init_app():
     with __app.app_context():
         # before_first_request
         logging.debug('Server starting up...')
-        if nh.start_up_server(debug=True) and ch.start_up_server(debug=False):
+        if nh.start_up_server(debug=False) and ch.start_up_server(debug=False):
             logging.debug('Server ready.')
     
         return __app
