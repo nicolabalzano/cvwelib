@@ -25,7 +25,9 @@ def __init_app():
     with __app.app_context():
         # before_first_request
         logging.debug('Server starting up...')
-        if nh.start_up_server(debug=False) and ch.start_up_server(debug=False):
+        
+        # put TRUE in the functions call to not fetch again the data at startup
+        if nh.start_up_server(debug=True) and ch.start_up_server(debug=True):
             logging.debug('Server ready.')
     
         return __app
@@ -54,7 +56,7 @@ def get_cve():
             return __cve_from_cwe(args[arg])
         if arg == 'year':
             return __cves_from_year(args[arg])
-        if arg == 'keywordSearch':
+        if arg == 'keywordSearchCVE':
             return __cves_from_desc(args[arg], True if 'keywordExactMatch' in args.keys() else False)
         if arg == 'cveCount':
             return __cve_count()
@@ -77,6 +79,8 @@ def __cves_from_year(year: str) -> dict:
 def __cves_from_desc(keyword: str, exact_match: bool) -> dict:
     return nh.get_cves_from_desc(keyword if keyword.strip() != "" else abort(400), exact_match)
 
+def __cwes_from_desc(keyword: str, exact_match: bool) -> dict:
+    return ch.get_cwes_from_desc(keyword if keyword.strip() != "" else abort(400), exact_match)
 
 def __cve_count() -> dict:
     return {'cveCount': nh.get_cve_count()}
@@ -101,6 +105,8 @@ def get_cwe():
             return __cwe_parents(args[arg])
         if arg == 'getChildren':
             return __cwe_children(args[arg])
+        if arg == 'keywordSearchCWE':
+            return __cwes_from_desc(args[arg], True if 'keywordExactMatch' in args.keys() else False) # TODO imoplemnt not exact match
         if arg == 'cweCount':
             return __cwe_count()
     

@@ -85,6 +85,25 @@ def get_cwe_from_id(cwe_id: str) -> dict:
             return cwe
     return {}
 
+def get_cwes_from_desc(search_str: str, exact_match: bool) -> list:
+    """
+        Desc:
+            Method to fetch all CWEs matching a given description string
+        Params:
+            :param search_str: The search string to be matched in the description field
+        Returns:
+            A list of all CWEs matching the given description string.
+            The list contains all information for each matching CWE
+    """
+    out = []
+    data = get_all_cwes()
+    if not exact_match: #TODO implement
+        return "TO BE IMPLEMENTED"
+    for cwe in data['weaknesses']:
+        if "full_description" in cwe and search_str.lower() in cwe['full_description'].lower():
+            out.append(cwe)
+    return out
+
 
 def get_cwe_parents(cwe_id: str) -> list:
     """
