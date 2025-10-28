@@ -62,7 +62,7 @@ CVE API Examples
 ```
 
 ```bash
-<HOST>:<PORT>/api/get_cve?keywordSearch=<KEY-WORD>&keywordExactMatch # Get all CVEs matching the keyword exactly
+<HOST>:<PORT>/api/get_cve?keywordSearchCVE=<KEY-WORD>&keywordExactMatch # Get all CVEs matching the keyword exactly
 ```
 
 ```bash
@@ -85,6 +85,14 @@ CWE API Examples
 
 ```bash
 <HOST>:<PORT>/api/get_cwe?getChildren=<CWE-ID> # Get all children of the inputted CWE
+```
+
+```bash
+<HOST>:<PORT>/api/get_cwe?keywordSearchCWE=<KEY-WORD> # Get all CWEs containing any specified keyword in their description
+```
+
+```bash
+<HOST>:<PORT>/api/get_cwe?keywordSearchCWE=<KEY-WORD>&keywordExactMatch # Get all CWEs matching the keyword exactly
 ```
 
 ```bash
