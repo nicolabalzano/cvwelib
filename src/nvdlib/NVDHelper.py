@@ -9,7 +9,7 @@ import requests
 import lzma
 import json
 import os
-
+import re
 
 __ignored_status = ['Rejected', 'Received']
 __quarantined_status = ['Undergoing Analysis', 'Awaiting Analysis']
@@ -149,6 +149,7 @@ def save_all_years_json() -> bool:
         except ValueError:
             return False
     save_to_json_file({'cve_count': cve_count}, 'CVE-Count.json')
+    build_search_index()
     return True
 
 
@@ -231,28 +232,51 @@ def get_cves_from_desc(keyword: str, exact_match: bool) -> list:
 
 
 def __get_exact_match(keyword: str) -> list:
-    out = []
-    # We look for an exact match
-    for year in range(1999, datetime.now().year + 1):
-        result = get_one_year_json(year)
-        for cve in result['cve_items']:
-            if keyword in (cve['descriptions'])[0]['value']:
-                out.append(cve)
-    return out
+    """
+        Finds CVEs where the keyword appears as an exact phrase in the description.
+        Uses the fast index search to narrow down candidates, then performs a final check.
+    """
+    # Use the fast 'any match' to get all potential candidates
+    candidates = __get_any_match(keyword)
+    
+    # Filter the candidates for an exact phrase match
+    # We check the lowercase description for the lowercase keyword
+    keyword_lower = keyword.lower()
+    exact_matches = [
+        cve for cve in candidates 
+        if keyword_lower in cve['descriptions'][0]['value'].lower()
+    ]
+    
+    return exact_matches
 
 
 def __get_any_match(keyword: str) -> list:
-    out = []
-    # We look for any keyword match
-    keywords = keyword.split(" ")
-    for year in range(1999, datetime.now().year + 1):
-        result = get_one_year_json(year)
-        for cve in result['cve_items']:
-            for key in keywords:
-                if key in (cve['descriptions'])[0]['value']:
-                    out.append(cve)
-                    break
-    return out
+    """
+        Finds CVEs that contain any of the words from the keyword.
+        Uses the pre-built search index for high performance.
+    """
+    try:
+        index = get_json_from_file("cve_search_index.json", "./src/_data/")
+    except FileNotFoundError:
+        logging.error("Search index 'cve_search_index.json' not found in './src/_data/'.")
+        logging.error("Please run build_search_index() first to enable fast searching.")
+        return []
+
+    # Split keyword into unique, lowercase words
+    keywords = set(keyword.lower().split())
+    matching_cve_ids = set()
+
+    # Collect all unique CVE IDs that match any of the keywords
+    for key in keywords:
+        # .get(key, []) returns the list of IDs or an empty list if the key is not in the index
+        matching_cve_ids.update(index.get(key, []))
+
+    # Retrieve the full CVE data for each unique ID found
+    # Using a list comprehension for a more concise syntax
+    out = [get_one_cve_from_id(cve_id) for cve_id in matching_cve_ids]
+    
+    # Filter out any potential empty results (e.g., if a CVE_ID was in the index but the file is missing)
+    return [cve for cve in out if cve]
 
 
 def get_cves_from_cwe(cwe_id: str):
@@ -269,7 +293,7 @@ def get_cves_from_cwe(cwe_id: str):
     if not check_cwe(cwe_id):
         raise ValueError('Badly formatted CWE-ID!')
     out = []
-    for year in range(1999, datetime.now().year + 1):
+    for year in range(datetime.now().year + 1, 1999, -1):
         result = get_one_year_json(year)
         for cve in result['cve_items']:
             if 'weaknesses' not in cve.keys():
@@ -290,3 +314,44 @@ def get_cve_count() -> int:
     """
     data = get_json_from_file('CVE-Count.json')
     return data['cve_count']
+
+
+def build_search_index():
+    """
+        Desc:
+            Builds an inverted index for fast CVE description searches.
+            This is a heavy operation and should be run only once or after updates.
+            The index maps keywords to a list of CVE IDs.
+    """
+    logging.info("Building search index... This may take a while.")
+    index = {}
+    data_dir = "./src/_data/"
+    
+    # Regex to find words (alphanumeric)
+    word_regex = re.compile(r'\b\w+\b')
+
+    for year in range(1999, datetime.now().year + 1):
+        try:
+            logging.info(f"Indexing year {year}...")
+            # Use get_one_year_json to aggregate all CVEs for the year
+            year_data = get_one_year_json(year)
+            for cve in year_data['cve_items']:
+                cve_id = cve['id']
+                # Combine ID and description for indexing
+                text_to_index = cve_id + ' ' + cve['descriptions'][0]['value']
+                
+                # Find all words, convert to lowercase, and add to index
+                words = set(word.lower() for word in word_regex.findall(text_to_index))
+                
+                for word in words:
+                    if word not in index:
+                        index[word] = []
+                    index[word].append(cve_id)
+        except FileNotFoundError:
+            logging.warning(f"Data for year {year} not found. Skipping.")
+            continue
+            
+    # Save the index to a file
+    index_path = os.path.join(data_dir, "cve_search_index.json")
+    save_to_json_file(index, "cve_search_index.json", data_dir)
+    logging.info(f"Search index built successfully and saved to {index_path}")
