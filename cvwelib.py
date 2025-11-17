@@ -86,6 +86,19 @@ def __cve_count() -> dict:
     return {'cveCount': nh.get_cve_count()}
 
 
+@__app.route('/api/rebuild_indexes', methods = ['GET', 'POST'])
+@cross_origin()
+def rebuild_indexes():
+    """Force rebuild of search and location indexes without re-downloading CVE data"""
+    try:
+        logging.info("Forcing rebuild of search and location indexes...")
+        nh.build_search_index()
+        return {'status': 'success', 'message': 'Indexes rebuilt successfully'}
+    except Exception as e:
+        logging.error(f"Error rebuilding indexes: {e}")
+        return {'status': 'error', 'message': str(e)}, 500
+
+
 @__app.route('/api/get_cwe', methods = ['GET'])
 @cross_origin()
 def get_cwe():

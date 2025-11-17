@@ -10,10 +10,11 @@ import lzma
 import json
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 __ignored_status = ['Rejected', 'Received']
 __quarantined_status = ['Undergoing Analysis', 'Awaiting Analysis']
-
+MAX_WORKERS = 4 # Maximum number of threads for parallel CVE retrieval
 
 def __get_json_data_from_xz(url: str) -> dict:
     """
@@ -192,6 +193,7 @@ def get_one_cve_from_id(cve_id: str, include_quarantined: bool = False) -> dict:
         Desc: 
             Method to retrieve the specified CVE-ID data. It can be specified to include quarantined vulnerabilities (default False),
             which are CVEs awaiting or undergoing analysis and for which it is NOT guaranteed to have available metrics.
+            OPTIMIZED: Uses location index for O(1) file lookup instead of scanning entire subcategory files.
         Params:
             :param cve_id: The requested CVE-ID
             :param include_quarantined: Requests the inclusion of quarantined vulnerabilities
@@ -200,15 +202,56 @@ def get_one_cve_from_id(cve_id: str, include_quarantined: bool = False) -> dict:
         Raises:
             :raises ValueError: if the specified CVE-ID is badly formatted
     """
+    # Debug: trace entry
+    print(f"[NVDHelper] get_one_cve_from_id START: {cve_id}")
+    logging.debug(f"get_one_cve_from_id START: {cve_id}")
+
     if not check_cve(cve_id):
+        logging.error(f"Badly formatted CVE-ID: {cve_id}")
         raise ValueError('Badly formatted CVE-ID!')
+
+    # Try to use location index first for O(1) lookup
+    try:
+        location_index = get_json_from_file("cve_location_index.json", "./src/_data/")
+        if cve_id in location_index:
+            location = location_index[cve_id]
+            year_dir = f"./src/_data/{location['year']}/"
+            data = get_json_from_file(location['file'], year_dir)
+            
+            # Find the specific CVE in the file
+            for cve in data['cve_items']:
+                if cve['id'] == cve_id:
+                    status = cve['vulnStatus']
+                    #logging.debug(f"Checking CVE {cve_id} status={status} (via location index)")
+                    if status in __ignored_status or (not include_quarantined and (status in __quarantined_status)):
+                        print(f"[NVDHelper] get_one_cve_from_id END (ignored status): {cve_id}")
+                        logging.debug(f"get_one_cve_from_id END (ignored status): {cve_id}")
+                        return {}
+                    print(f"[NVDHelper] get_one_cve_from_id FOUND (via location index): {cve_id}")
+                    logging.debug(f"get_one_cve_from_id FOUND (via location index): {cve_id}")
+                    return cve
+    except FileNotFoundError:
+        logging.warning("CVE location index not found, falling back to subcategory scan")
+    except Exception as e:
+        logging.warning(f"Error using location index for {cve_id}: {e}, falling back to subcategory scan")
+    
+    # Fallback to old method if index not available or CVE not found in index
+    print(f"[NVDHelper] get_one_cve_from_id - using fallback subcategory scan for: {cve_id}")
+    logging.debug(f"get_one_cve_from_id - using fallback subcategory scan for: {cve_id}")
     data = get_one_subcategory_json(cve_id[:11])
     for cve in data['cve_items']:
         status = cve['vulnStatus']
+        # Debug: report status when scanning
+        #logging.debug(f"Checking CVE {cve.get('id')} status={status}")
         if status in __ignored_status or (not include_quarantined and (status in __quarantined_status)):
             continue
         if cve['id'] == cve_id:
+            print(f"[NVDHelper] get_one_cve_from_id FOUND (via subcategory scan): {cve_id}")
+            logging.debug(f"get_one_cve_from_id FOUND (via subcategory scan): {cve_id}")
             return cve
+
+    print(f"[NVDHelper] get_one_cve_from_id END (not found): {cve_id}")
+    logging.debug(f"get_one_cve_from_id END (not found): {cve_id}")
     return {}
 
 
@@ -225,35 +268,25 @@ def get_cves_from_desc(keyword: str, exact_match: bool) -> list:
         Returns:
             The list of all matching CVEs
     """
+    # Debug: trace search invocation
+    print(f"[NVDHelper] get_cves_from_desc START keyword='{keyword}' exact_match={exact_match}")
+    logging.debug(f"get_cves_from_desc START keyword='{keyword}' exact_match={exact_match}")
+
     if exact_match:
-        return __get_exact_match(keyword)
+        result = __get_exact_match(keyword)
     else:
-        return __get_any_match(keyword)
+        result = __get_any_match(keyword)
+
+    print(f"[NVDHelper] get_cves_from_desc END found={len(result)} items for keyword='{keyword}'")
+    logging.debug(f"get_cves_from_desc END found={len(result)} items for keyword='{keyword}'")
+    return result
 
 
 def __get_exact_match(keyword: str) -> list:
     """
-        Finds CVEs where the keyword appears as an exact phrase in the description.
-        Uses the fast index search to narrow down candidates, then performs a final check.
-    """
-    # Use the fast 'any match' to get all potential candidates
-    candidates = __get_any_match(keyword)
-    
-    # Filter the candidates for an exact phrase match
-    # We check the lowercase description for the lowercase keyword
-    keyword_lower = keyword.lower()
-    exact_matches = [
-        cve for cve in candidates 
-        if keyword_lower in cve['descriptions'][0]['value'].lower()
-    ]
-    
-    return exact_matches
-
-
-def __get_any_match(keyword: str) -> list:
-    """
         Finds CVEs that contain any of the words from the keyword.
         Uses the pre-built search index for high performance.
+        Uses 10 threads to parallelize CVE retrieval.
     """
     try:
         index = get_json_from_file("cve_search_index.json", "./src/_data/")
@@ -266,17 +299,102 @@ def __get_any_match(keyword: str) -> list:
     keywords = set(keyword.lower().split())
     matching_cve_ids = set()
 
+    print(f"[NVDHelper] __get_exact_match START keywords={keywords}")
+    logging.debug(f"__get_exact_match START keywords={keywords}")
+
     # Collect all unique CVE IDs that match any of the keywords
     for key in keywords:
         # .get(key, []) returns the list of IDs or an empty list if the key is not in the index
         matching_cve_ids.update(index.get(key, []))
 
-    # Retrieve the full CVE data for each unique ID found
-    # Using a list comprehension for a more concise syntax
-    out = [get_one_cve_from_id(cve_id) for cve_id in matching_cve_ids]
+    # Convert to list and split work among 4 threads
+    cve_ids_list = list(matching_cve_ids)
+    print(f"[NVDHelper] __get_exact_match - total matching IDs: {len(cve_ids_list)}")
+    logging.debug(f"__get_exact_match - total matching IDs: {len(cve_ids_list)}")
     
-    # Filter out any potential empty results (e.g., if a CVE_ID was in the index but the file is missing)
-    return [cve for cve in out if cve]
+    if not cve_ids_list:
+        return []
+    
+    # Parallelize CVE retrieval using ThreadPoolExecutor with 4 workers
+    out = []
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        print(f"[NVDHelper] __get_exact_match - starting ThreadPoolExecutor with 4 workers")
+        logging.debug("__get_exact_match - starting ThreadPoolExecutor with 4 workers")
+
+        # Submit all tasks
+        future_to_cve = {executor.submit(get_one_cve_from_id, cve_id): cve_id 
+                        for cve_id in cve_ids_list}
+        
+        # Collect results as they complete
+        for future in as_completed(future_to_cve):
+            cve_id = future_to_cve[future]
+            try:
+                cve = future.result()
+                print(f"[NVDHelper] __get_exact_match - completed {cve_id} (found={bool(cve)})")
+                logging.debug(f"__get_exact_match - completed {cve_id} (found={bool(cve)})")
+                if cve:  # Filter out empty results
+                    out.append(cve)
+            except Exception as exc:
+                logging.error(f'CVE {cve_id} generated an exception: {exc}')
+    
+    return out
+
+
+def __get_any_match(keyword: str) -> list:
+    """
+        Finds CVEs where the keyword is a substring of any word in the description.
+        Uses the pre-built search index for high performance.
+        Uses 10 threads to parallelize CVE retrieval.
+    """
+    try:
+        index = get_json_from_file("cve_search_index.json", "./src/_data/")
+    except FileNotFoundError:
+        logging.error("Search index 'cve_search_index.json' not found in './src/_data/'.")
+        logging.error("Please run build_search_index() first to enable fast searching.")
+        return []
+
+    search_term = keyword.lower()
+    matching_cve_ids = set()
+
+    print(f"[NVDHelper] __get_any_match START search_term='{search_term}'")
+    logging.debug(f"__get_any_match START search_term='{search_term}'")
+
+    # Iterate through all keys in the index and check for substring matches
+    for key, cve_ids in index.items():
+        if search_term in key:
+            matching_cve_ids.update(cve_ids)
+
+    # Convert to list for parallel processing
+    cve_ids_list = list(matching_cve_ids)
+    print(f"[NVDHelper] __get_any_match - total matching IDs: {len(cve_ids_list)}")
+    logging.debug(f"__get_any_match - total matching IDs: {len(cve_ids_list)}")
+    
+    if not cve_ids_list:
+        return []
+    
+    # Parallelize CVE retrieval using ThreadPoolExecutor with 10 workers
+    out = []
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        print(f"[NVDHelper] __get_any_match - starting ThreadPoolExecutor with 10 workers")
+        logging.debug("__get_any_match - starting ThreadPoolExecutor with 10 workers")
+
+        # Submit all tasks
+        future_to_cve = {executor.submit(get_one_cve_from_id, cve_id): cve_id 
+                        for cve_id in cve_ids_list}
+        
+        # Collect results as they complete
+        for future in as_completed(future_to_cve):
+            cve_id = future_to_cve[future]
+            try:
+                cve = future.result()
+                print(f"[NVDHelper] __get_any_match - completed {cve_id} (found={bool(cve)})")
+                logging.debug(f"__get_any_match - completed {cve_id} (found={bool(cve)})")
+                if cve:  # Filter out empty results
+                    out.append(cve)
+            except Exception as exc:
+                logging.error(f'CVE {cve_id} generated an exception: {exc}')
+    
+    return out
 
 
 def get_cves_from_cwe(cwe_id: str):
@@ -316,12 +434,51 @@ def get_cve_count() -> int:
     return data['cve_count']
 
 
+def build_cve_location_index():
+    """
+        Desc:
+            Builds an index mapping CVE-ID to its file location for O(1) lookup.
+            This allows direct file access instead of scanning entire subcategory files.
+            The index maps CVE-ID to {file, year}.
+    """
+    logging.info("Building CVE location index...")
+    location_index = {}
+    data_dir = "./src/_data/"
+    
+    for year in range(1999, datetime.now().year + 1):
+        year_dir = f"{data_dir}{year}/"
+        if not os.path.isdir(year_dir):
+            continue
+            
+        logging.info(f"Indexing locations for year {year}...")
+        for filename in os.scandir(year_dir):
+            if not filename.name.endswith('.json'):
+                continue
+                
+            try:
+                data = get_json_from_file(filename.name, year_dir)
+                for cve in data['cve_items']:
+                    cve_id = cve['id']
+                    location_index[cve_id] = {
+                        'file': filename.name,
+                        'year': year
+                    }
+            except Exception as e:
+                logging.warning(f"Error indexing {filename.name}: {e}")
+                continue
+    
+    index_path = os.path.join(data_dir, "cve_location_index.json")
+    save_to_json_file(location_index, "cve_location_index.json", data_dir)
+    logging.info(f"CVE location index built with {len(location_index)} entries and saved to {index_path}")
+
+
 def build_search_index():
     """
         Desc:
             Builds an inverted index for fast CVE description searches.
             This is a heavy operation and should be run only once or after updates.
             The index maps keywords to a list of CVE IDs.
+            Also builds the CVE location index for O(1) file lookup.
     """
     logging.info("Building search index... This may take a while.")
     index = {}
@@ -355,3 +512,6 @@ def build_search_index():
     index_path = os.path.join(data_dir, "cve_search_index.json")
     save_to_json_file(index, "cve_search_index.json", data_dir)
     logging.info(f"Search index built successfully and saved to {index_path}")
+    
+    # Build location index for fast CVE retrieval
+    build_cve_location_index()
