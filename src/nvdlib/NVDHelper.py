@@ -114,7 +114,8 @@ def save_one_year_json(year: int) -> int:
     sub_cat_list = __get_cve_file_list(formatted_data)
 
     for cat in sub_cat_list:
-        out = deepcopy(formatted_data)
+        # Use json serialize/deserialize instead of deepcopy to ensure clean data
+        out = json.loads(json.dumps(formatted_data))
         out['cve_items'].clear()
 
         for cve in formatted_data['cve_items']:
@@ -266,19 +267,13 @@ def get_cves_from_desc(keyword: str, exact_match: bool) -> list:
             :param keyword: The given keyword to look for
             :param exact_match: The boolean value to specify search mode
         Returns:
-            The list of all matching CVEs
+            The list of all matching CVE IDs
     """
-    # Debug: trace search invocation
-    print(f"[NVDHelper] get_cves_from_desc START keyword='{keyword}' exact_match={exact_match}")
-    logging.debug(f"get_cves_from_desc START keyword='{keyword}' exact_match={exact_match}")
-
     if exact_match:
         result = __get_exact_match(keyword)
     else:
         result = __get_any_match(keyword)
 
-    print(f"[NVDHelper] get_cves_from_desc END found={len(result)} items for keyword='{keyword}'")
-    logging.debug(f"get_cves_from_desc END found={len(result)} items for keyword='{keyword}'")
     return result
 
 
@@ -286,7 +281,7 @@ def __get_exact_match(keyword: str) -> list:
     """
         Finds CVEs that contain any of the words from the keyword.
         Uses the pre-built search index for high performance.
-        Uses 10 threads to parallelize CVE retrieval.
+        Returns only CVE IDs, not full CVE objects.
     """
     try:
         index = get_json_from_file("cve_search_index.json", "./src/_data/")
@@ -299,52 +294,23 @@ def __get_exact_match(keyword: str) -> list:
     keywords = set(keyword.lower().split())
     matching_cve_ids = set()
 
-    print(f"[NVDHelper] __get_exact_match START keywords={keywords}")
-    logging.debug(f"__get_exact_match START keywords={keywords}")
-
     # Collect all unique CVE IDs that match any of the keywords
     for key in keywords:
         # .get(key, []) returns the list of IDs or an empty list if the key is not in the index
         matching_cve_ids.update(index.get(key, []))
 
-    # Convert to list and split work among 4 threads
+    # Convert to list
     cve_ids_list = list(matching_cve_ids)
-    print(f"[NVDHelper] __get_exact_match - total matching IDs: {len(cve_ids_list)}")
-    logging.debug(f"__get_exact_match - total matching IDs: {len(cve_ids_list)}")
     
-    if not cve_ids_list:
-        return []
-    
-    # Parallelize CVE retrieval using ThreadPoolExecutor with 4 workers
-    out = []
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        print(f"[NVDHelper] __get_exact_match - starting ThreadPoolExecutor with 4 workers")
-        logging.debug("__get_exact_match - starting ThreadPoolExecutor with 4 workers")
-
-        # Submit all tasks
-        future_to_cve = {executor.submit(get_one_cve_from_id, cve_id): cve_id 
-                        for cve_id in cve_ids_list}
-        
-        # Collect results as they complete
-        for future in as_completed(future_to_cve):
-            cve_id = future_to_cve[future]
-            try:
-                cve = future.result()
-                print(f"[NVDHelper] __get_exact_match - completed {cve_id} (found={bool(cve)})")
-                logging.debug(f"__get_exact_match - completed {cve_id} (found={bool(cve)})")
-                if cve:  # Filter out empty results
-                    out.append(cve)
-            except Exception as exc:
-                logging.error(f'CVE {cve_id} generated an exception: {exc}')
-    
-    return out
+    # Return only the IDs
+    return cve_ids_list
 
 
 def __get_any_match(keyword: str) -> list:
     """
         Finds CVEs where the keyword is a substring of any word in the description.
         Uses the pre-built search index for high performance.
-        Uses 10 threads to parallelize CVE retrieval.
+        Returns only CVE IDs, not full CVE objects.
     """
     try:
         index = get_json_from_file("cve_search_index.json", "./src/_data/")
@@ -356,45 +322,16 @@ def __get_any_match(keyword: str) -> list:
     search_term = keyword.lower()
     matching_cve_ids = set()
 
-    print(f"[NVDHelper] __get_any_match START search_term='{search_term}'")
-    logging.debug(f"__get_any_match START search_term='{search_term}'")
-
     # Iterate through all keys in the index and check for substring matches
     for key, cve_ids in index.items():
         if search_term in key:
             matching_cve_ids.update(cve_ids)
 
-    # Convert to list for parallel processing
+    # Convert to list
     cve_ids_list = list(matching_cve_ids)
-    print(f"[NVDHelper] __get_any_match - total matching IDs: {len(cve_ids_list)}")
-    logging.debug(f"__get_any_match - total matching IDs: {len(cve_ids_list)}")
     
-    if not cve_ids_list:
-        return []
-    
-    # Parallelize CVE retrieval using ThreadPoolExecutor with 10 workers
-    out = []
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        print(f"[NVDHelper] __get_any_match - starting ThreadPoolExecutor with 10 workers")
-        logging.debug("__get_any_match - starting ThreadPoolExecutor with 10 workers")
-
-        # Submit all tasks
-        future_to_cve = {executor.submit(get_one_cve_from_id, cve_id): cve_id 
-                        for cve_id in cve_ids_list}
-        
-        # Collect results as they complete
-        for future in as_completed(future_to_cve):
-            cve_id = future_to_cve[future]
-            try:
-                cve = future.result()
-                print(f"[NVDHelper] __get_any_match - completed {cve_id} (found={bool(cve)})")
-                logging.debug(f"__get_any_match - completed {cve_id} (found={bool(cve)})")
-                if cve:  # Filter out empty results
-                    out.append(cve)
-            except Exception as exc:
-                logging.error(f'CVE {cve_id} generated an exception: {exc}')
-    
-    return out
+    # Return only the IDs
+    return cve_ids_list
 
 
 def get_cves_from_cwe(cwe_id: str):

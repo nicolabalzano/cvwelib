@@ -10,7 +10,7 @@ The project is structured so that the local server will automatically download a
 In case of an existing server, the data will be automatically updated each day based on the `Modified` feeds.
 
 ```bash
-CVE-Modified.json # CVEs that were modified or added in the previous eight days
+CVE-Modified.json
 ```
 
 ### Before running the code

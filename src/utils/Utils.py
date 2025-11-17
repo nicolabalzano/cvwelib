@@ -35,8 +35,9 @@ def save_to_json_file(json_data, filename: str, path: str ="./src/_data/"):
             :param filename: the filename including the extension of the file (e.g.: 'file.json')
             :param path: the save folder path - './src/_data/' by default
     """
-    json_string = json.dumps(json_data, indent=4, default=str)
-    __write_to_file__(json_string, filename, path)
+    # Write directly to file without creating intermediate string
+    with open(f"{path}{filename}", "w", encoding='utf-8') as outfile:
+        json.dump(json_data, outfile, indent=4, ensure_ascii=False)
 
 
 def __write_to_file__(file_content, filename: str, path: str):

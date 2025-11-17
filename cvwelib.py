@@ -145,7 +145,7 @@ def __cwe_count() -> dict:
 # App start up
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', __default_port))
-    __app.run(host = '0.0.0.0', port = port, debug = True)
+    __app.run(host = '0.0.0.0', port = port, debug = False)
 
 # Shut down the scheduler when exiting the app
 atexit.register(lambda: __scheduler.shutdown())
