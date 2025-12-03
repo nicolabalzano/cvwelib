@@ -38,7 +38,7 @@ def save_to_json_file(json_data, filename: str, path: str ="./src/_data/"):
     # Write directly to file without creating intermediate string
     with open(f"{path}{filename}", "w", encoding='utf-8') as outfile:
         json.dump(json_data, outfile, indent=4, ensure_ascii=False)
-
+        
 
 def __write_to_file__(file_content, filename: str, path: str):
     with open(f"{path}{filename}", "w") as outfile:

@@ -8,6 +8,8 @@ def get_pretty_cwe_json(raw_data: dict) -> dict:
     }
     out['weaknesses'] = []
     for weakness in raw_data['Weakness_Catalog']['Weaknesses']['Weakness']:
+        if weakness['@Status'] == 'Deprecated':
+            continue
         weakness_id = weakness['@ID']
         item = {
             'id': f'CWE-{weakness_id}',
